@@ -33,7 +33,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.interop.UIKitView
 import kotlinx.cinterop.BetaInteropApi
-import kotlinx.cinterop.CValue
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.ObjCAction
 import kotlinx.cinterop.addressOf
@@ -501,7 +500,8 @@ private fun BoxScope.RealDeviceCamera(
         background = Color.Black,
         factory = {
             val dispatchGroup = dispatch_group_create()
-            val cameraContainer = UIView()
+            val cameraContainer = CameraContainerView()
+            cameraContainer.previewLayer = cameraPreviewLayer
             cameraContainer.layer.addSublayer(cameraPreviewLayer)
             cameraPreviewLayer.videoGravity = AVLayerVideoGravityResizeAspectFill
             dispatch_group_enter(dispatchGroup)
@@ -518,13 +518,6 @@ private fun BoxScope.RealDeviceCamera(
                 onCameraReady()
             }
             cameraContainer
-        },
-        onResize = { view: UIView, rect: CValue<CGRect> ->
-            CATransaction.begin()
-            CATransaction.setValue(true, kCATransactionDisableActions)
-            view.layer.setFrame(rect)
-            cameraPreviewLayer.setFrame(rect)
-            CATransaction.commit()
         },
     )
     // Call the triggerCapture lambda when the capture button is clicked
@@ -666,7 +659,8 @@ private fun RealDeviceCamera(
         background = Color.Black,
         factory = {
             val dispatchGroup = dispatch_group_create()
-            val cameraContainer = UIView()
+            val cameraContainer = CameraContainerView()
+            cameraContainer.previewLayer = cameraPreviewLayer
             cameraContainer.layer.addSublayer(cameraPreviewLayer)
             cameraPreviewLayer.videoGravity = AVLayerVideoGravityResizeAspectFill
             dispatch_group_enter(dispatchGroup)
@@ -679,14 +673,21 @@ private fun RealDeviceCamera(
             }
             cameraContainer
         },
-        onResize = { view: UIView, rect: CValue<CGRect> ->
-            CATransaction.begin()
-            CATransaction.setValue(true, kCATransactionDisableActions)
-            view.layer.setFrame(rect)
-            cameraPreviewLayer.setFrame(rect)
-            CATransaction.commit()
-        },
     )
+}
+
+@OptIn(ExperimentalForeignApi::class)
+private class CameraContainerView : UIView() {
+    var previewLayer: AVCaptureVideoPreviewLayer? = null
+
+    override fun layoutSubviews() {
+        super.layoutSubviews()
+        val layer = previewLayer ?: return
+        CATransaction.begin()
+        CATransaction.setValue(true, kCATransactionDisableActions)
+        layer.frame = bounds
+        CATransaction.commit()
+    }
 }
 
 class OrientationListener(
