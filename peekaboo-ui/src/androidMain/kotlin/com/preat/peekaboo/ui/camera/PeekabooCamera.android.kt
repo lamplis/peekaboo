@@ -15,6 +15,8 @@
  */
 package com.preat.peekaboo.ui.camera
 
+import android.content.Context
+import android.content.ContextWrapper
 import android.graphics.Bitmap
 import android.graphics.Matrix
 import androidx.camera.core.AspectRatio
@@ -28,6 +30,7 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.Alignment
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -36,8 +39,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.LifecycleOwner
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.PermissionStatus
 import com.google.accompanist.permissions.rememberPermissionState
@@ -90,10 +93,16 @@ private fun CompatOverlay(
     progressIndicator: @Composable () -> Unit,
 ) {
     Box(modifier = modifier) {
-        captureIcon(state::capture)
-        convertIcon(state::toggleCamera)
+        Box(modifier = Modifier.align(Alignment.BottomCenter)) {
+            captureIcon(state::capture)
+        }
+        Box(modifier = Modifier.align(Alignment.TopEnd)) {
+            convertIcon(state::toggleCamera)
+        }
         if (state.isCapturing) {
-            progressIndicator()
+            Box(modifier = Modifier.align(Alignment.Center)) {
+                progressIndicator()
+            }
         }
     }
 }
@@ -115,14 +124,13 @@ actual fun PeekabooCamera(
             )
         }
         is PermissionStatus.Denied -> {
-            if (cameraPermissionState.status.shouldShowRationale) {
-                LaunchedEffect(Unit) {
-                    cameraPermissionState.launchPermissionRequest()
-                }
-            } else {
-                Box(modifier = modifier) {
-                    permissionDeniedContent()
-                }
+            // Always request permission on first encounter (shouldShowRationale is false
+            // on first ask, so we must still request it)
+            LaunchedEffect(Unit) {
+                cameraPermissionState.launchPermissionRequest()
+            }
+            Box(modifier = modifier) {
+                permissionDeniedContent()
             }
         }
     }
@@ -134,7 +142,11 @@ private fun CameraWithGrantedPermission(
     modifier: Modifier,
 ) {
     val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
+    // Use Activity as lifecycle owner to ensure camera works inside Dialogs
+    // (Dialog's LocalLifecycleOwner may not be in RESUMED state)
+    val lifecycleOwner: LifecycleOwner = remember(context) {
+        context.findLifecycleOwner()
+    }
     val cameraProvider: ProcessCameraProvider? by loadCameraProvider(context)
 
     val preview = Preview.Builder().build()
@@ -255,4 +267,14 @@ private fun Bitmap.rotate(degrees: Int): ByteArray {
     val matrix = Matrix().apply { postRotate(degrees.toFloat()) }
     val rotatedBitmap = Bitmap.createBitmap(this, 0, 0, this.width, this.height, matrix, true)
     return rotatedBitmap.toByteArray()
+}
+
+/** Walk the Context wrapper chain to find a LifecycleOwner (typically the Activity). */
+private fun Context.findLifecycleOwner(): LifecycleOwner {
+    var ctx: Context = this
+    while (ctx !is LifecycleOwner) {
+        ctx = (ctx as? ContextWrapper)?.baseContext
+            ?: throw IllegalStateException("No LifecycleOwner found in Context chain")
+    }
+    return ctx
 }

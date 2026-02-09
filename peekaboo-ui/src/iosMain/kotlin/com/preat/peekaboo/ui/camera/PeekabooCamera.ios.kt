@@ -102,6 +102,7 @@ import platform.UIKit.UIGraphicsGetImageFromCurrentImageContext
 import platform.UIKit.UIImage
 import platform.UIKit.UIImageOrientation
 import platform.UIKit.UIImagePNGRepresentation
+import platform.UIKit.UIColor
 import platform.UIKit.UIView
 import platform.darwin.DISPATCH_QUEUE_PRIORITY_DEFAULT
 import platform.darwin.NSObject
@@ -221,10 +222,16 @@ private fun CompatOverlay(
     progressIndicator: @Composable () -> Unit,
 ) {
     Box(modifier = modifier) {
-        captureIcon(state::capture)
-        convertIcon(state::toggleCamera)
+        Box(modifier = Modifier.align(Alignment.BottomCenter)) {
+            captureIcon(state::capture)
+        }
+        Box(modifier = Modifier.align(Alignment.TopEnd)) {
+            convertIcon(state::toggleCamera)
+        }
         if (state.isCapturing) {
-            progressIndicator()
+            Box(modifier = Modifier.align(Alignment.Center)) {
+                progressIndicator()
+            }
         }
     }
 }
@@ -497,29 +504,20 @@ private fun BoxScope.RealDeviceCamera(
 
     UIKitView(
         modifier = Modifier.fillMaxSize(),
-        background = Color.Black,
         factory = {
-            val dispatchGroup = dispatch_group_create()
             val cameraContainer = CameraContainerView()
+            cameraContainer.backgroundColor = UIColor.blackColor
             cameraContainer.previewLayer = cameraPreviewLayer
             cameraContainer.layer.addSublayer(cameraPreviewLayer)
             cameraPreviewLayer.videoGravity = AVLayerVideoGravityResizeAspectFill
-            dispatch_group_enter(dispatchGroup)
-            dispatch_async(
-                dispatch_get_global_queue(
-                    DISPATCH_QUEUE_PRIORITY_DEFAULT.toLong(),
-                    0UL,
-                ),
-            ) {
-                captureSession.startRunning()
-                dispatch_group_leave(dispatchGroup)
-            }
-            dispatch_group_notify(dispatchGroup, dispatch_get_main_queue()) {
-                onCameraReady()
-            }
             cameraContainer
         },
     )
+    DisposableEffect(captureSession) {
+        onDispose {
+            captureSession.stopRunning()
+        }
+    }
     // Call the triggerCapture lambda when the capture button is clicked
     captureIcon(triggerCapture)
     convertIcon(switchCamera)
@@ -656,28 +654,24 @@ private fun RealDeviceCamera(
 
     UIKitView(
         modifier = modifier,
-        background = Color.Black,
         factory = {
-            val dispatchGroup = dispatch_group_create()
             val cameraContainer = CameraContainerView()
+            cameraContainer.backgroundColor = UIColor.blackColor
             cameraContainer.previewLayer = cameraPreviewLayer
             cameraContainer.layer.addSublayer(cameraPreviewLayer)
             cameraPreviewLayer.videoGravity = AVLayerVideoGravityResizeAspectFill
-            dispatch_group_enter(dispatchGroup)
-            dispatch_async(queue) {
-                captureSession.startRunning()
-                dispatch_group_leave(dispatchGroup)
-            }
-            dispatch_group_notify(dispatchGroup, dispatch_get_main_queue()) {
-                state.onCameraReady()
-            }
             cameraContainer
         },
     )
+    DisposableEffect(captureSession) {
+        onDispose {
+            captureSession.stopRunning()
+        }
+    }
 }
 
 @OptIn(ExperimentalForeignApi::class)
-private class CameraContainerView : UIView() {
+private class CameraContainerView : UIView(frame = CGRectMake(0.0, 0.0, 0.0, 0.0)) {
     var previewLayer: AVCaptureVideoPreviewLayer? = null
 
     override fun layoutSubviews() {
