@@ -44,8 +44,6 @@ kotlin {
             implementation(compose.foundation)
             implementation(compose.material)
             implementation(libs.components.resources)
-            implementation(libs.paging.common)
-            implementation(libs.paging.compose.common)
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)
@@ -58,6 +56,8 @@ kotlin {
             implementation(libs.camera.lifecycle)
             implementation(libs.camera.view)
             implementation(libs.kotlinx.coroutines.guava)
+            implementation(libs.paging.common)
+            implementation(libs.paging.compose.common)
         }
     }
 }
