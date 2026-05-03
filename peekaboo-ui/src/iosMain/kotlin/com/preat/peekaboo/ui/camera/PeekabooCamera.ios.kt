@@ -76,6 +76,9 @@ import platform.AVFoundation.authorizationStatusForMediaType
 import platform.AVFoundation.fileDataRepresentation
 import platform.AVFoundation.position
 import platform.AVFoundation.requestAccessForMediaType
+import platform.CoreGraphics.CGImageGetHeight
+import platform.CoreGraphics.CGImageGetWidth
+import platform.CoreGraphics.CGImageCreateWithImageInRect
 import platform.CoreGraphics.CGRect
 import platform.CoreGraphics.CGRectMake
 import platform.CoreMedia.CMSampleBufferGetImageBuffer
@@ -129,6 +132,7 @@ private val deviceTypes =
 actual fun PeekabooCamera(
     state: PeekabooCameraState,
     modifier: Modifier,
+    captureAspectRatio: Float?,
     permissionDeniedContent: @Composable () -> Unit,
 ) {
     var cameraAccess: CameraAccess by remember { mutableStateOf(CameraAccess.Undefined) }
@@ -173,6 +177,7 @@ actual fun PeekabooCamera(
                 AuthorizedCamera(
                     state = state,
                     modifier = Modifier.fillMaxSize(),
+                    captureAspectRatio = captureAspectRatio,
                 )
             }
         }
@@ -188,6 +193,7 @@ actual fun PeekabooCamera(
     progressIndicator: @Composable () -> Unit,
     onCapture: (byteArray: ByteArray?) -> Unit,
     onFrame: ((frame: ByteArray) -> Unit)?,
+    captureAspectRatio: Float?,
     permissionDeniedContent: @Composable () -> Unit,
 ) {
     val state =
@@ -202,6 +208,7 @@ actual fun PeekabooCamera(
         PeekabooCamera(
             state = state,
             modifier = modifier,
+            captureAspectRatio = captureAspectRatio,
         )
         CompatOverlay(
             modifier = Modifier.fillMaxSize(),
@@ -288,6 +295,7 @@ private fun BoxScope.AuthorizedCamera(
 private fun AuthorizedCamera(
     state: PeekabooCameraState,
     modifier: Modifier = Modifier,
+    captureAspectRatio: Float? = null,
 ) {
     val camera: AVCaptureDevice? =
         remember {
@@ -307,6 +315,7 @@ private fun AuthorizedCamera(
             state = state,
             camera = camera,
             modifier = modifier,
+            captureAspectRatio = captureAspectRatio,
         )
     } else {
         Text(
@@ -532,6 +541,7 @@ private fun RealDeviceCamera(
     state: PeekabooCameraState,
     camera: AVCaptureDevice,
     modifier: Modifier,
+    captureAspectRatio: Float? = null,
 ) {
     val queue =
         remember {
@@ -540,8 +550,21 @@ private fun RealDeviceCamera(
     val capturePhotoOutput = remember { AVCapturePhotoOutput() }
     val videoOutput = remember { AVCaptureVideoDataOutput() }
 
+    // Defer-resolved holder so the delegate can read the latest preview-layer reference at
+    // capture time (the layer is created below; we'll point the holder at it).
+    val previewLayerHolder = remember { PreviewLayerHolder() }
     val photoCaptureDelegate =
-        remember(state) { PhotoCaptureDelegate(state::stopCapturing, state::onCapture) }
+        remember(state, captureAspectRatio) {
+            PhotoCaptureDelegate(
+                onCaptureEnd = state::stopCapturing,
+                onCapture = state::onCapture,
+                previewLayerProvider = if (captureAspectRatio != null) {
+                    { previewLayerHolder.layer }
+                } else {
+                    { null }
+                },
+            )
+        }
 
     val frameAnalyzerDelegate =
         remember {
@@ -593,7 +616,9 @@ private fun RealDeviceCamera(
 
     val cameraPreviewLayer =
         remember {
-            AVCaptureVideoPreviewLayer(session = captureSession)
+            AVCaptureVideoPreviewLayer(session = captureSession).also { layer ->
+                previewLayerHolder.layer = layer
+            }
         }
 
     // Update captureSession with new camera configuration whenever isFrontCamera changed.
@@ -744,9 +769,18 @@ class CameraFrameAnalyzerDelegate(
     }
 }
 
+/**
+ * Mutable holder so the [PhotoCaptureDelegate] can read the latest preview-layer reference at
+ * capture time without having to recreate the delegate when the layer is created.
+ */
+class PreviewLayerHolder {
+    var layer: AVCaptureVideoPreviewLayer? = null
+}
+
 class PhotoCaptureDelegate(
     private val onCaptureEnd: () -> Unit,
     private val onCapture: (byteArray: ByteArray?) -> Unit,
+    private val previewLayerProvider: () -> AVCaptureVideoPreviewLayer? = { null },
 ) : NSObject(), AVCapturePhotoCaptureDelegateProtocol {
     @OptIn(ExperimentalForeignApi::class)
     override fun captureOutput(
@@ -775,12 +809,59 @@ class PhotoCaptureDelegate(
                 UIGraphicsEndImageContext()
                 uiImage = normalizedImage!!
             }
+
+            // Apple's recommended approach: convert the visible preview-layer rect to normalized
+            // capture-output coordinates, then crop the captured image to that rect. This makes
+            // the saved photo match what the preview layer was displaying.
+            // https://developer.apple.com/documentation/avfoundation/avcapturevideopreviewlayer/1623501-metadataoutputrectconverted
+            val previewLayer = previewLayerProvider()
+            if (previewLayer != null) {
+                cropImageToPreviewLayer(uiImage, previewLayer)?.let { uiImage = it }
+            }
+
             val imageData = UIImagePNGRepresentation(uiImage)
             val byteArray: ByteArray? = imageData?.toByteArray()
             onCapture(byteArray)
         }
         onCaptureEnd()
     }
+}
+
+@OptIn(ExperimentalForeignApi::class)
+private fun cropImageToPreviewLayer(
+    image: UIImage,
+    previewLayer: AVCaptureVideoPreviewLayer,
+): UIImage? {
+    val layerSize = previewLayer.bounds.useContents { size.width to size.height }
+    if (layerSize.first <= 0.0 || layerSize.second <= 0.0) return null
+
+    // Normalized rect in [0,1] of the captured image describing the visible preview area.
+    // Apple's K/N name for `metadataOutputRectConverted(fromLayerRect:)` is
+    // `metadataOutputRectOfInterestForRect(_:)` (the Objective-C selector).
+    val outputRect = previewLayer.metadataOutputRectOfInterestForRect(previewLayer.bounds)
+    val rectInfo = outputRect.useContents {
+        listOf(origin.x, origin.y, size.width, size.height)
+    }
+    val originX = rectInfo[0]
+    val originY = rectInfo[1]
+    val rectWidth = rectInfo[2]
+    val rectHeight = rectInfo[3]
+    if (rectWidth <= 0.0 || rectHeight <= 0.0) return null
+
+    val cgImage = image.CGImage ?: return null
+    val pixelWidth = CGImageGetWidth(cgImage).toDouble()
+    val pixelHeight = CGImageGetHeight(cgImage).toDouble()
+    if (pixelWidth <= 0.0 || pixelHeight <= 0.0) return null
+
+    val cropX = (originX * pixelWidth).coerceIn(0.0, pixelWidth - 1.0)
+    val cropY = (originY * pixelHeight).coerceIn(0.0, pixelHeight - 1.0)
+    val cropWidth = (rectWidth * pixelWidth).coerceAtMost(pixelWidth - cropX)
+    val cropHeight = (rectHeight * pixelHeight).coerceAtMost(pixelHeight - cropY)
+    if (cropWidth < 1.0 || cropHeight < 1.0) return null
+
+    val cropRect = CGRectMake(cropX, cropY, cropWidth, cropHeight)
+    val croppedCgImage = CGImageCreateWithImageInRect(cgImage, cropRect) ?: return null
+    return UIImage.imageWithCGImage(croppedCgImage, image.scale, image.imageOrientation)
 }
 
 @OptIn(ExperimentalForeignApi::class)

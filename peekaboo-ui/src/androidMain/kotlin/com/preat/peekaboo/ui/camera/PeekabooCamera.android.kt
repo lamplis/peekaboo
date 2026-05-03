@@ -19,6 +19,7 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.graphics.Bitmap
 import android.graphics.Matrix
+import android.util.Rational
 import androidx.camera.core.AspectRatio
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
@@ -26,6 +27,8 @@ import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCapture.OnImageCapturedCallback
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
+import androidx.camera.core.UseCaseGroup
+import androidx.camera.core.ViewPort
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.layout.Box
@@ -44,9 +47,11 @@ import androidx.lifecycle.LifecycleOwner
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.PermissionStatus
 import com.google.accompanist.permissions.rememberPermissionState
-import com.google.accompanist.permissions.shouldShowRationale
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.roundToInt
 
 private val executor = Executors.newSingleThreadExecutor()
 
@@ -59,6 +64,7 @@ actual fun PeekabooCamera(
     progressIndicator: @Composable () -> Unit,
     onCapture: (byteArray: ByteArray?) -> Unit,
     onFrame: ((frame: ByteArray) -> Unit)?,
+    captureAspectRatio: Float?,
     permissionDeniedContent: @Composable () -> Unit,
 ) {
     val state =
@@ -73,6 +79,7 @@ actual fun PeekabooCamera(
         PeekabooCamera(
             state = state,
             modifier = modifier,
+            captureAspectRatio = captureAspectRatio,
         )
         CompatOverlay(
             modifier = Modifier.fillMaxSize(),
@@ -112,6 +119,7 @@ private fun CompatOverlay(
 actual fun PeekabooCamera(
     state: PeekabooCameraState,
     modifier: Modifier,
+    captureAspectRatio: Float?,
     permissionDeniedContent: @Composable () -> Unit,
 ) {
     val cameraPermissionState =
@@ -121,6 +129,7 @@ actual fun PeekabooCamera(
             CameraWithGrantedPermission(
                 state = state,
                 modifier = modifier,
+                captureAspectRatio = captureAspectRatio,
             )
         }
         is PermissionStatus.Denied -> {
@@ -140,6 +149,7 @@ actual fun PeekabooCamera(
 private fun CameraWithGrantedPermission(
     state: PeekabooCameraState,
     modifier: Modifier,
+    captureAspectRatio: Float?,
 ) {
     val context = LocalContext.current
     // Use Activity as lifecycle owner to ensure camera works inside Dialogs
@@ -149,7 +159,7 @@ private fun CameraWithGrantedPermission(
     }
     val cameraProvider: ProcessCameraProvider? by loadCameraProvider(context)
 
-    val preview = Preview.Builder().build()
+    val preview = remember { Preview.Builder().build() }
     val previewView = remember { PreviewView(context) }
     val imageCapture: ImageCapture = remember { ImageCapture.Builder().build() }
     val backgroundExecutor = remember { Executors.newSingleThreadExecutor() }
@@ -192,18 +202,29 @@ private fun CameraWithGrantedPermission(
         }
     }
 
-    LaunchedEffect(state.cameraMode, cameraProvider, imageAnalyzer) {
+    LaunchedEffect(state.cameraMode, cameraProvider, imageAnalyzer, captureAspectRatio) {
         if (cameraProvider != null) {
             state.onCameraReady()
             cameraProvider?.unbindAll()
+            // CameraX official guidance: bind preview + capture (and analyzer if any) through a
+            // UseCaseGroup that shares a ViewPort. Both use cases then share the same crop rect,
+            // so the saved photo matches what was visible in the preview surface.
+            // https://developer.android.com/reference/kotlin/androidx/camera/core/ViewPort
+            val useCaseGroupBuilder = UseCaseGroup.Builder().addUseCase(preview).addUseCase(imageCapture)
+            imageAnalyzer?.let { useCaseGroupBuilder.addUseCase(it) }
+            if (captureAspectRatio != null && captureAspectRatio > 0f) {
+                val rotation = preview.targetRotation
+                val rational = aspectRatioToRational(captureAspectRatio)
+                val viewPort =
+                    ViewPort.Builder(rational, rotation)
+                        .setScaleType(ViewPort.FILL_CENTER)
+                        .build()
+                useCaseGroupBuilder.setViewPort(viewPort)
+            }
             cameraProvider?.bindToLifecycle(
                 lifecycleOwner,
                 cameraSelector,
-                *listOfNotNull(
-                    preview,
-                    imageCapture,
-                    imageAnalyzer,
-                ).toTypedArray(),
+                useCaseGroupBuilder.build(),
             )
             preview.setSurfaceProvider(previewView.surfaceProvider)
         }
@@ -230,6 +251,23 @@ private fun CameraWithGrantedPermission(
     )
 }
 
+/**
+ * Convert a `width / height` ratio to a [Rational] suitable for [ViewPort.Builder].
+ *
+ * CameraX expects the rational in the natural orientation of the target rotation. Since our
+ * preview surfaces use the device's portrait orientation by default, we keep the same `w:h`
+ * convention as the rest of the app.
+ */
+internal fun aspectRatioToRational(aspectRatio: Float): Rational {
+    // Multiply by 10_000 to retain precision for ratios like 63 / 88 = 0.71590...
+    val numerator = (aspectRatio * 10_000f).roundToInt().coerceAtLeast(1)
+    val denominator = 10_000
+    val divisor = gcd(numerator, denominator)
+    return Rational(numerator / divisor, denominator / divisor)
+}
+
+private tailrec fun gcd(a: Int, b: Int): Int = if (b == 0) a else gcd(b, a % b)
+
 class ImageCaptureCallback(
     private val onCapture: (byteArray: ByteArray?) -> Unit,
     private val stopCapturing: () -> Unit,
@@ -241,16 +279,39 @@ class ImageCaptureCallback(
     }
 }
 
+/**
+ * Convert an [ImageProxy] to JPEG bytes, honoring both the EXIF rotation and any crop rect set
+ * by CameraX (e.g. via the use-case group's ViewPort).
+ */
 private fun ImageProxy.toByteArray(): ByteArray {
     val rotationDegrees = imageInfo.rotationDegrees
     val bitmap = toBitmap()
 
-    // Rotate the image if necessary
+    // CameraX exposes the requested ViewPort area via `cropRect`. Apply it BEFORE rotation so the
+    // saved bytes contain only the rectangle that was visible in the preview surface.
+    val cropped =
+        runCatching {
+            val rect = cropRect
+            if (rect.width() in 1..bitmap.width && rect.height() in 1..bitmap.height &&
+                (rect.left != 0 || rect.top != 0 || rect.width() != bitmap.width || rect.height() != bitmap.height)
+            ) {
+                Bitmap.createBitmap(
+                    bitmap,
+                    max(0, rect.left),
+                    max(0, rect.top),
+                    min(rect.width(), bitmap.width - max(0, rect.left)),
+                    min(rect.height(), bitmap.height - max(0, rect.top)),
+                ).also { if (it != bitmap) bitmap.recycle() }
+            } else {
+                bitmap
+            }
+        }.getOrDefault(bitmap)
+
     val rotatedData =
         if (rotationDegrees != 0) {
-            bitmap.rotate(rotationDegrees)
+            cropped.rotate(rotationDegrees)
         } else {
-            bitmap.toByteArray()
+            cropped.toByteArray()
         }
     close()
 
