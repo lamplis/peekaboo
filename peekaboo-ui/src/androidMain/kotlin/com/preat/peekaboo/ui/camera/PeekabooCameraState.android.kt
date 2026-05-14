@@ -15,6 +15,8 @@
  */
 package com.preat.peekaboo.ui.camera
 
+import android.graphics.Bitmap
+import androidx.camera.core.ImageProxy
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
@@ -99,10 +101,35 @@ actual fun rememberPeekabooCameraState(
 }
 
 actual class PeekabooCameraFrame internal constructor(
-    val bitmap: android.graphics.Bitmap,
+    private val imageProxy: ImageProxy,
     actual val metadata: PeekabooFrameMetadata,
 ) {
-    actual fun retainForAsyncAnalysis() = Unit
+    private var retainedForAsyncAnalysis = false
+    private var released = false
+    private var cachedBitmap: Bitmap? = null
 
-    actual fun releaseAfterAsyncAnalysis() = Unit
+    val bitmap: Bitmap
+        get() {
+            check(!released) { "Camera frame was released before bitmap conversion" }
+            return cachedBitmap ?: imageProxy.toBitmap().also { cachedBitmap = it }
+        }
+
+    actual fun retainForAsyncAnalysis() {
+        retainedForAsyncAnalysis = true
+    }
+
+    actual fun releaseAfterAsyncAnalysis() {
+        if (released) return
+        cachedBitmap?.recycle()
+        cachedBitmap = null
+        imageProxy.close()
+        retainedForAsyncAnalysis = false
+        released = true
+    }
+
+    internal fun releaseIfNotRetained() {
+        if (!retainedForAsyncAnalysis) {
+            releaseAfterAsyncAnalysis()
+        }
+    }
 }

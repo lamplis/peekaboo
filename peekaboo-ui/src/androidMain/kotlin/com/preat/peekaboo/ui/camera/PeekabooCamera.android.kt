@@ -199,9 +199,9 @@ private fun CameraWithGrantedPermission(
                         val scannerFrame = state.onScannerFrame
                         val legacyFrame = state.onFrame
                         if (scannerFrame != null) {
-                            scannerFrame(
+                            val frame =
                                 PeekabooCameraFrame(
-                                    bitmap = imageProxy.toBitmap(),
+                                    imageProxy = imageProxy,
                                     metadata =
                                         PeekabooFrameMetadata(
                                             width = imageProxy.width,
@@ -209,9 +209,12 @@ private fun CameraWithGrantedPermission(
                                             rotationDegrees = imageProxy.imageInfo.rotationDegrees,
                                             timestampMillis = imageProxy.imageInfo.timestamp / 1_000_000L,
                                         ),
-                                ),
-                            )
-                            imageProxy.close()
+                                )
+                            try {
+                                scannerFrame(frame)
+                            } finally {
+                                frame.releaseIfNotRetained()
+                            }
                         } else if (legacyFrame != null) {
                             val imageBytes = imageProxy.toByteArray()
                             legacyFrame(imageBytes)

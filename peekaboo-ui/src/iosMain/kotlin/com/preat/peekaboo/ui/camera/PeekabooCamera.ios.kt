@@ -61,6 +61,7 @@ import platform.AVFoundation.AVCapturePhotoCaptureDelegateProtocol
 import platform.AVFoundation.AVCapturePhotoOutput
 import platform.AVFoundation.AVCapturePhotoSettings
 import platform.AVFoundation.AVCaptureSession
+import platform.AVFoundation.AVCaptureSessionPresetHigh
 import platform.AVFoundation.AVCaptureSessionPresetPhoto
 import platform.AVFoundation.AVCaptureVideoDataOutput
 import platform.AVFoundation.AVCaptureVideoDataOutputSampleBufferDelegateProtocol
@@ -623,7 +624,12 @@ private fun RealDeviceCamera(
     val captureSession: AVCaptureSession =
         remember {
             AVCaptureSession().also { captureSession ->
-                captureSession.sessionPreset = AVCaptureSessionPresetPhoto
+                captureSession.sessionPreset =
+                    if (state.onScannerFrame != null) {
+                        AVCaptureSessionPresetHigh
+                    } else {
+                        AVCaptureSessionPresetPhoto
+                    }
                 val captureDeviceInput: AVCaptureDeviceInput =
                     deviceInputWithDevice(device = camera, error = null)!!
                 captureSession.addInput(captureDeviceInput)
@@ -722,14 +728,6 @@ private fun RealDeviceCamera(
             val cameraContainer = CameraContainerView()
             cameraContainer.backgroundColor = UIColor.blackColor
             cameraContainer.previewLayer = cameraPreviewLayer
-            cameraContainer.onLayout = {
-                applyVideoOrientation(
-                    cameraPreviewLayer = cameraPreviewLayer,
-                    capturePhotoOutput = capturePhotoOutput,
-                    videoOutput = videoOutput,
-                    forcedOrientation = previewOrientationMode.toForcedVideoOrientation(),
-                )
-            }
             cameraContainer.layer.addSublayer(cameraPreviewLayer)
             cameraPreviewLayer.videoGravity = previewScaleType.toAvLayerVideoGravity()
             cameraContainer
@@ -745,7 +743,6 @@ private fun RealDeviceCamera(
 @OptIn(ExperimentalForeignApi::class)
 private class CameraContainerView : UIView(frame = CGRectMake(0.0, 0.0, 0.0, 0.0)) {
     var previewLayer: AVCaptureVideoPreviewLayer? = null
-    var onLayout: (() -> Unit)? = null
 
     override fun layoutSubviews() {
         super.layoutSubviews()
@@ -754,7 +751,6 @@ private class CameraContainerView : UIView(frame = CGRectMake(0.0, 0.0, 0.0, 0.0
         CATransaction.setValue(true, kCATransactionDisableActions)
         layer.frame = bounds
         CATransaction.commit()
-        onLayout?.invoke()
     }
 }
 
@@ -800,11 +796,17 @@ private fun applyVideoOrientation(
 
                 else -> cameraConnection?.videoOrientation ?: AVCaptureVideoOrientationPortrait
             }
-    cameraConnection?.videoOrientation = actualOrientation
+    cameraConnection?.setVideoOrientationIfChanged(actualOrientation)
     capturePhotoOutput.connectionWithMediaType(AVMediaTypeVideo)
-        ?.videoOrientation = actualOrientation
+        ?.setVideoOrientationIfChanged(actualOrientation)
     videoOutput.connectionWithMediaType(AVMediaTypeVideo)
-        ?.videoOrientation = actualOrientation
+        ?.setVideoOrientationIfChanged(actualOrientation)
+}
+
+private fun AVCaptureConnection.setVideoOrientationIfChanged(orientation: Long) {
+    if (videoOrientation != orientation) {
+        videoOrientation = orientation
+    }
 }
 
 class CameraFrameAnalyzerDelegate(
@@ -823,7 +825,7 @@ class CameraFrameAnalyzerDelegate(
         val imageBuffer = CMSampleBufferGetImageBuffer(didOutputSampleBuffer) ?: return
         onScannerFrame?.invoke(
             PeekabooCameraFrame(
-                pixelBuffer = imageBuffer,
+                sourcePixelBuffer = imageBuffer,
                 metadata =
                     PeekabooFrameMetadata(
                         width = CVPixelBufferGetWidth(imageBuffer).toInt(),
