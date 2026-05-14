@@ -18,6 +18,16 @@ package com.preat.peekaboo.ui.camera
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 
+enum class CameraPreviewScaleType {
+    AspectFill,
+    AspectFit,
+}
+
+enum class CameraPreviewOrientationMode {
+    FollowDevice,
+    Portrait,
+}
+
 /**
  * `PeekabooCamera` is a composable function that provides a customizable camera UI within a Compose Multiplatform application.
  * It allows for the display of a camera preview, along with custom capture and convert buttons, and an optional progress indicator during photo capture.
@@ -51,7 +61,10 @@ expect fun PeekabooCamera(
     progressIndicator: @Composable () -> Unit = {},
     onCapture: (byteArray: ByteArray?) -> Unit,
     onFrame: ((frame: ByteArray) -> Unit)? = null,
+    onScannerFrame: ((frame: PeekabooCameraFrame) -> Unit)? = null,
     captureAspectRatio: Float? = null,
+    previewScaleType: CameraPreviewScaleType = CameraPreviewScaleType.AspectFill,
+    previewOrientationMode: CameraPreviewOrientationMode = CameraPreviewOrientationMode.FollowDevice,
     permissionDeniedContent: @Composable () -> Unit = {},
 )
 
@@ -77,5 +90,7 @@ expect fun PeekabooCamera(
     state: PeekabooCameraState,
     modifier: Modifier,
     captureAspectRatio: Float? = null,
+    previewScaleType: CameraPreviewScaleType = CameraPreviewScaleType.AspectFill,
+    previewOrientationMode: CameraPreviewOrientationMode = CameraPreviewOrientationMode.FollowDevice,
     permissionDeniedContent: @Composable () -> Unit = {},
 )

@@ -22,11 +22,15 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import kotlinx.cinterop.ExperimentalForeignApi
+import platform.CoreFoundation.CFRelease
+import platform.CoreFoundation.CFRetain
 
 @Stable
 actual class PeekabooCameraState(
     cameraMode: CameraMode,
     internal var onFrame: ((frame: ByteArray) -> Unit)?,
+    internal var onScannerFrame: ((frame: PeekabooCameraFrame) -> Unit)?,
     internal var onCapture: (ByteArray?) -> Unit,
 ) {
     actual var isCameraReady: Boolean by mutableStateOf(false)
@@ -61,6 +65,7 @@ actual class PeekabooCameraState(
     companion object {
         fun saver(
             onFrame: ((frame: ByteArray) -> Unit)?,
+            onScannerFrame: ((frame: PeekabooCameraFrame) -> Unit)?,
             onCapture: (ByteArray?) -> Unit,
         ): Saver<PeekabooCameraState, Int> {
             return Saver(
@@ -71,6 +76,7 @@ actual class PeekabooCameraState(
                     PeekabooCameraState(
                         cameraMode = cameraModeFromId(it),
                         onFrame = onFrame,
+                        onScannerFrame = onScannerFrame,
                         onCapture = onCapture,
                     )
                 },
@@ -83,12 +89,34 @@ actual class PeekabooCameraState(
 actual fun rememberPeekabooCameraState(
     initialCameraMode: CameraMode,
     onFrame: ((frame: ByteArray) -> Unit)?,
+    onScannerFrame: ((frame: PeekabooCameraFrame) -> Unit)?,
     onCapture: (ByteArray?) -> Unit,
 ): PeekabooCameraState {
     return rememberSaveable(
-        saver = PeekabooCameraState.saver(onFrame, onCapture),
-    ) { PeekabooCameraState(initialCameraMode, onFrame, onCapture) }.apply {
+        saver = PeekabooCameraState.saver(onFrame, onScannerFrame, onCapture),
+    ) { PeekabooCameraState(initialCameraMode, onFrame, onScannerFrame, onCapture) }.apply {
         this.onFrame = onFrame
+        this.onScannerFrame = onScannerFrame
         this.onCapture = onCapture
+    }
+}
+
+@OptIn(ExperimentalForeignApi::class)
+actual class PeekabooCameraFrame internal constructor(
+    val pixelBuffer: platform.CoreVideo.CVPixelBufferRef,
+    actual val metadata: PeekabooFrameMetadata,
+) {
+    private var retainedForAsyncAnalysis = false
+
+    actual fun retainForAsyncAnalysis() {
+        if (retainedForAsyncAnalysis) return
+        CFRetain(pixelBuffer)
+        retainedForAsyncAnalysis = true
+    }
+
+    actual fun releaseAfterAsyncAnalysis() {
+        if (!retainedForAsyncAnalysis) return
+        CFRelease(pixelBuffer)
+        retainedForAsyncAnalysis = false
     }
 }

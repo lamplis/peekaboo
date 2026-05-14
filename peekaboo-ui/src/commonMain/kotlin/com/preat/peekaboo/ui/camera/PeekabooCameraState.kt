@@ -28,8 +28,24 @@ import androidx.compose.runtime.remember
 expect fun rememberPeekabooCameraState(
     initialCameraMode: CameraMode = CameraMode.Back,
     onFrame: ((frame: ByteArray) -> Unit)? = null,
+    onScannerFrame: ((frame: PeekabooCameraFrame) -> Unit)? = null,
     onCapture: (ByteArray?) -> Unit,
 ): PeekabooCameraState
+
+data class PeekabooFrameMetadata(
+    val width: Int,
+    val height: Int,
+    val rotationDegrees: Int,
+    val timestampMillis: Long,
+)
+
+expect class PeekabooCameraFrame {
+    val metadata: PeekabooFrameMetadata
+
+    fun retainForAsyncAnalysis()
+
+    fun releaseAfterAsyncAnalysis()
+}
 
 /**
  * State of [PeekabooCamera]. Contains states relating to camera control.

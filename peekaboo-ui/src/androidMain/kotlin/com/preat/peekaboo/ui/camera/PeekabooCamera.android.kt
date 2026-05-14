@@ -64,13 +64,17 @@ actual fun PeekabooCamera(
     progressIndicator: @Composable () -> Unit,
     onCapture: (byteArray: ByteArray?) -> Unit,
     onFrame: ((frame: ByteArray) -> Unit)?,
+    onScannerFrame: ((frame: PeekabooCameraFrame) -> Unit)?,
     captureAspectRatio: Float?,
+    previewScaleType: CameraPreviewScaleType,
+    previewOrientationMode: CameraPreviewOrientationMode,
     permissionDeniedContent: @Composable () -> Unit,
 ) {
     val state =
         rememberPeekabooCameraState(
             initialCameraMode = cameraMode,
             onFrame = onFrame,
+            onScannerFrame = onScannerFrame,
             onCapture = onCapture,
         )
     Box(
@@ -80,6 +84,8 @@ actual fun PeekabooCamera(
             state = state,
             modifier = modifier,
             captureAspectRatio = captureAspectRatio,
+            previewScaleType = previewScaleType,
+            previewOrientationMode = previewOrientationMode,
         )
         CompatOverlay(
             modifier = Modifier.fillMaxSize(),
@@ -120,6 +126,8 @@ actual fun PeekabooCamera(
     state: PeekabooCameraState,
     modifier: Modifier,
     captureAspectRatio: Float?,
+    previewScaleType: CameraPreviewScaleType,
+    previewOrientationMode: CameraPreviewOrientationMode,
     permissionDeniedContent: @Composable () -> Unit,
 ) {
     val cameraPermissionState =
@@ -130,6 +138,8 @@ actual fun PeekabooCamera(
                 state = state,
                 modifier = modifier,
                 captureAspectRatio = captureAspectRatio,
+                previewScaleType = previewScaleType,
+                previewOrientationMode = previewOrientationMode,
             )
         }
         is PermissionStatus.Denied -> {
@@ -150,6 +160,8 @@ private fun CameraWithGrantedPermission(
     state: PeekabooCameraState,
     modifier: Modifier,
     captureAspectRatio: Float?,
+    previewScaleType: CameraPreviewScaleType,
+    @Suppress("UNUSED_PARAMETER") previewOrientationMode: CameraPreviewOrientationMode,
 ) {
     val context = LocalContext.current
     // Use Activity as lifecycle owner to ensure camera works inside Dialogs
@@ -160,12 +172,21 @@ private fun CameraWithGrantedPermission(
     val cameraProvider: ProcessCameraProvider? by loadCameraProvider(context)
 
     val preview = remember { Preview.Builder().build() }
-    val previewView = remember { PreviewView(context) }
+    val previewView =
+        remember {
+            PreviewView(context).apply {
+                scaleType =
+                    when (previewScaleType) {
+                        CameraPreviewScaleType.AspectFill -> PreviewView.ScaleType.FILL_CENTER
+                        CameraPreviewScaleType.AspectFit -> PreviewView.ScaleType.FIT_CENTER
+                    }
+            }
+        }
     val imageCapture: ImageCapture = remember { ImageCapture.Builder().build() }
     val backgroundExecutor = remember { Executors.newSingleThreadExecutor() }
-    val imageAnalyzer =
-        remember(state.onFrame) {
-            state.onFrame?.let { onFrame ->
+    val imageAnalyzer: ImageAnalysis? =
+        remember(state.onFrame, state.onScannerFrame) {
+            if (state.onFrame != null || state.onScannerFrame != null) {
                 val analyzer =
                     ImageAnalysis.Builder()
                         .setTargetAspectRatio(AspectRatio.RATIO_4_3)
@@ -175,10 +196,32 @@ private fun CameraWithGrantedPermission(
 
                 analyzer.apply {
                     setAnalyzer(backgroundExecutor) { imageProxy ->
-                        val imageBytes = imageProxy.toByteArray()
-                        onFrame(imageBytes)
+                        val scannerFrame = state.onScannerFrame
+                        val legacyFrame = state.onFrame
+                        if (scannerFrame != null) {
+                            scannerFrame(
+                                PeekabooCameraFrame(
+                                    bitmap = imageProxy.toBitmap(),
+                                    metadata =
+                                        PeekabooFrameMetadata(
+                                            width = imageProxy.width,
+                                            height = imageProxy.height,
+                                            rotationDegrees = imageProxy.imageInfo.rotationDegrees,
+                                            timestampMillis = imageProxy.imageInfo.timestamp / 1_000_000L,
+                                        ),
+                                ),
+                            )
+                            imageProxy.close()
+                        } else if (legacyFrame != null) {
+                            val imageBytes = imageProxy.toByteArray()
+                            legacyFrame(imageBytes)
+                        } else {
+                            imageProxy.close()
+                        }
                     }
                 }
+            } else {
+                null
             }
         }
 

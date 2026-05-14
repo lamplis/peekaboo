@@ -27,6 +27,7 @@ import androidx.compose.runtime.setValue
 actual class PeekabooCameraState(
     cameraMode: CameraMode,
     internal var onFrame: ((frame: ByteArray) -> Unit)?,
+    internal var onScannerFrame: ((frame: PeekabooCameraFrame) -> Unit)?,
     internal var onCapture: (ByteArray?) -> Unit,
 ) {
     actual var isCameraReady: Boolean by mutableStateOf(false)
@@ -61,6 +62,7 @@ actual class PeekabooCameraState(
     companion object {
         fun saver(
             onFrame: ((frame: ByteArray) -> Unit)?,
+            onScannerFrame: ((frame: PeekabooCameraFrame) -> Unit)?,
             onCapture: (ByteArray?) -> Unit,
         ): Saver<PeekabooCameraState, Int> {
             return Saver(
@@ -71,6 +73,7 @@ actual class PeekabooCameraState(
                     PeekabooCameraState(
                         cameraMode = cameraModeFromId(it),
                         onFrame = onFrame,
+                        onScannerFrame = onScannerFrame,
                         onCapture = onCapture,
                     )
                 },
@@ -83,11 +86,23 @@ actual class PeekabooCameraState(
 actual fun rememberPeekabooCameraState(
     initialCameraMode: CameraMode,
     onFrame: ((frame: ByteArray) -> Unit)?,
+    onScannerFrame: ((frame: PeekabooCameraFrame) -> Unit)?,
     onCapture: (ByteArray?) -> Unit,
 ): PeekabooCameraState {
     return rememberSaveable(
-        saver = PeekabooCameraState.saver(onFrame, onCapture),
-    ) { PeekabooCameraState(initialCameraMode, onFrame, onCapture) }.apply {
+        saver = PeekabooCameraState.saver(onFrame, onScannerFrame, onCapture),
+    ) { PeekabooCameraState(initialCameraMode, onFrame, onScannerFrame, onCapture) }.apply {
+        this.onFrame = onFrame
+        this.onScannerFrame = onScannerFrame
         this.onCapture = onCapture
     }
+}
+
+actual class PeekabooCameraFrame internal constructor(
+    val bitmap: android.graphics.Bitmap,
+    actual val metadata: PeekabooFrameMetadata,
+) {
+    actual fun retainForAsyncAnalysis() = Unit
+
+    actual fun releaseAfterAsyncAnalysis() = Unit
 }
