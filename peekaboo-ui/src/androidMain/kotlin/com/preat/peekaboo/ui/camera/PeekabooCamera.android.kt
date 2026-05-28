@@ -21,6 +21,7 @@ import android.graphics.Bitmap
 import android.graphics.Matrix
 import android.util.Rational
 import androidx.camera.core.AspectRatio
+import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
@@ -39,6 +40,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -241,9 +243,14 @@ private fun CameraWithGrantedPermission(
                 }
             CameraSelector.Builder().requireLensFacing(lensFacing).build()
         }
+    val boundCamera = remember { mutableStateOf<Camera?>(null) }
 
     DisposableEffect(Unit) {
         onDispose {
+            runCatching { boundCamera.value?.cameraControl?.enableTorch(false) }
+            boundCamera.value = null
+            state.isTorchAvailable = false
+            state.setTorchActive(false)
             cameraProvider?.unbindAll()
         }
     }
@@ -251,6 +258,8 @@ private fun CameraWithGrantedPermission(
     LaunchedEffect(state.cameraMode, cameraProvider, imageAnalyzer, captureAspectRatio) {
         if (cameraProvider != null) {
             state.onCameraReady()
+            runCatching { boundCamera.value?.cameraControl?.enableTorch(false) }
+            boundCamera.value = null
             cameraProvider?.unbindAll()
             // CameraX official guidance: bind preview + capture (and analyzer if any) through a
             // UseCaseGroup that shares a ViewPort. Both use cases then share the same crop rect,
@@ -267,12 +276,34 @@ private fun CameraWithGrantedPermission(
                         .build()
                 useCaseGroupBuilder.setViewPort(viewPort)
             }
-            cameraProvider?.bindToLifecycle(
+            val camera =
+                cameraProvider?.bindToLifecycle(
                 lifecycleOwner,
                 cameraSelector,
                 useCaseGroupBuilder.build(),
             )
+            boundCamera.value = camera
+            val hasTorch = state.cameraMode == CameraMode.Back && (camera?.cameraInfo?.hasFlashUnit() == true)
+            state.isTorchAvailable = hasTorch
+            if (!hasTorch) {
+                state.setTorchActive(false)
+            }
             preview.setSurfaceProvider(previewView.surfaceProvider)
+        } else {
+            boundCamera.value = null
+            state.isTorchAvailable = false
+            state.setTorchActive(false)
+        }
+    }
+
+    LaunchedEffect(boundCamera.value, state.isTorchEnabled, state.cameraMode, state.isTorchAvailable) {
+        val camera = boundCamera.value ?: return@LaunchedEffect
+        val shouldEnableTorch =
+            state.cameraMode == CameraMode.Back &&
+                state.isTorchAvailable &&
+                state.isTorchEnabled
+        runCatching {
+            camera.cameraControl.enableTorch(shouldEnableTorch)
         }
     }
 

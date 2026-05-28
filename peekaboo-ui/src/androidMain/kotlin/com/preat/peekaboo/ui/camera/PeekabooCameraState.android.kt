@@ -38,10 +38,24 @@ actual class PeekabooCameraState(
 
     actual var cameraMode: CameraMode by mutableStateOf(cameraMode)
 
+    actual var isTorchAvailable: Boolean by mutableStateOf(false)
+
+    actual var isTorchEnabled: Boolean by mutableStateOf(false)
+
     internal var triggerCaptureAnchor: (() -> Unit)? = null
 
     actual fun toggleCamera() {
+        isTorchEnabled = false
+        isTorchAvailable = false
         cameraMode = cameraMode.inverse()
+    }
+
+    actual fun setTorchActive(enabled: Boolean) {
+        isTorchEnabled = enabled && isTorchAvailable
+    }
+
+    actual fun toggleTorch() {
+        setTorchActive(!isTorchEnabled)
     }
 
     actual fun capture() {

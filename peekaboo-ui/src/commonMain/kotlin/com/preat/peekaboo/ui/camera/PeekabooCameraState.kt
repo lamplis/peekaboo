@@ -61,7 +61,17 @@ expect class PeekabooCameraState {
     var cameraMode: CameraMode
         internal set
 
+    var isTorchAvailable: Boolean
+        internal set
+
+    var isTorchEnabled: Boolean
+        internal set
+
     fun toggleCamera()
+
+    fun setTorchActive(enabled: Boolean)
+
+    fun toggleTorch()
 
     fun capture()
 }

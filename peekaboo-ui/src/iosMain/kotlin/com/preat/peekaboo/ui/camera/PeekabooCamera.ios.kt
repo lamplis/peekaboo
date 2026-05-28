@@ -63,6 +63,8 @@ import platform.AVFoundation.AVCapturePhotoSettings
 import platform.AVFoundation.AVCaptureSession
 import platform.AVFoundation.AVCaptureSessionPresetHigh
 import platform.AVFoundation.AVCaptureSessionPresetPhoto
+import platform.AVFoundation.AVCaptureTorchModeOff
+import platform.AVFoundation.AVCaptureTorchModeOn
 import platform.AVFoundation.AVCaptureVideoDataOutput
 import platform.AVFoundation.AVCaptureVideoDataOutputSampleBufferDelegateProtocol
 import platform.AVFoundation.AVCaptureVideoOrientationLandscapeLeft
@@ -76,7 +78,10 @@ import platform.AVFoundation.AVVideoCodecKey
 import platform.AVFoundation.AVVideoCodecTypeJPEG
 import platform.AVFoundation.authorizationStatusForMediaType
 import platform.AVFoundation.fileDataRepresentation
+import platform.AVFoundation.hasTorch
+import platform.AVFoundation.isTorchModeSupported
 import platform.AVFoundation.position
+import platform.AVFoundation.torchMode
 import platform.AVFoundation.requestAccessForMediaType
 import platform.CoreGraphics.CGImageGetHeight
 import platform.CoreGraphics.CGImageGetWidth
@@ -655,8 +660,11 @@ private fun RealDeviceCamera(
             }
         }
 
-    // Update captureSession with new camera configuration whenever isFrontCamera changed.
+    // Update captureSession with new camera configuration whenever camera mode changes.
     LaunchedEffect(state.cameraMode) {
+        captureSession.activeInputDevice()?.setTorchEnabled(false)
+        state.isTorchEnabled = false
+        state.isTorchAvailable = false
         val dispatchGroup = dispatch_group_create()
         captureSession.beginConfiguration()
         captureSession.inputs.forEach { captureSession.removeInput(it as AVCaptureInput) }
@@ -687,8 +695,15 @@ private fun RealDeviceCamera(
                 videoOutput = videoOutput,
                 forcedOrientation = previewOrientationMode.toForcedVideoOrientation(),
             )
+            state.refreshTorchAvailability(captureSession)
             state.onCameraReady()
         }
+    }
+
+    LaunchedEffect(state.isTorchEnabled, state.cameraMode, captureSession) {
+        val activeDevice = state.refreshTorchAvailability(captureSession)
+        val shouldEnableTorch = state.isTorchAvailable && state.isTorchEnabled
+        activeDevice?.setTorchEnabled(shouldEnableTorch)
     }
 
     DisposableEffect(cameraPreviewLayer, capturePhotoOutput, videoOutput, state, previewOrientationMode) {
@@ -735,6 +750,9 @@ private fun RealDeviceCamera(
     )
     DisposableEffect(captureSession) {
         onDispose {
+            captureSession.activeInputDevice()?.setTorchEnabled(false)
+            state.isTorchEnabled = false
+            state.isTorchAvailable = false
             captureSession.stopRunning()
         }
     }
@@ -769,6 +787,38 @@ class OrientationListener(
 
     fun applyCurrentOrientation() {
         applyVideoOrientation(cameraPreviewLayer, capturePhotoOutput, videoOutput, forcedOrientation)
+    }
+}
+
+@OptIn(ExperimentalForeignApi::class)
+private fun AVCaptureSession.activeInputDevice(): AVCaptureDevice? =
+    (inputs.firstOrNull { it is AVCaptureDeviceInput } as? AVCaptureDeviceInput)?.device
+
+@OptIn(ExperimentalForeignApi::class)
+private fun PeekabooCameraState.refreshTorchAvailability(captureSession: AVCaptureSession): AVCaptureDevice? {
+    val activeDevice = captureSession.activeInputDevice()
+    val available = cameraMode == CameraMode.Back && (activeDevice?.hasTorch == true)
+    isTorchAvailable = available
+    if (!available && isTorchEnabled) {
+        isTorchEnabled = false
+    }
+    return activeDevice
+}
+
+@OptIn(ExperimentalForeignApi::class)
+private fun AVCaptureDevice.setTorchEnabled(enabled: Boolean) {
+    if (!hasTorch) return
+    if (enabled && !isTorchModeSupported(AVCaptureTorchModeOn)) return
+    if (!lockForConfiguration(null)) return
+    try {
+        torchMode =
+            if (enabled) {
+                AVCaptureTorchModeOn
+            } else {
+                AVCaptureTorchModeOff
+            }
+    } finally {
+        unlockForConfiguration()
     }
 }
 
