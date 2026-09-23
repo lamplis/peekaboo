@@ -22,18 +22,27 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import kotlinx.cinterop.ByteVar
+import kotlinx.cinterop.COpaquePointer
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.alloc
 import kotlinx.cinterop.memScoped
+import kotlinx.cinterop.plus
 import kotlinx.cinterop.ptr
+import kotlinx.cinterop.reinterpret
 import kotlinx.cinterop.value
 import platform.CoreFoundation.CFRelease
 import platform.CoreVideo.CVPixelBufferCreate
 import platform.CoreVideo.CVPixelBufferGetBaseAddress
+import platform.CoreVideo.CVPixelBufferGetBaseAddressOfPlane
 import platform.CoreVideo.CVPixelBufferGetBytesPerRow
+import platform.CoreVideo.CVPixelBufferGetBytesPerRowOfPlane
 import platform.CoreVideo.CVPixelBufferGetHeight
+import platform.CoreVideo.CVPixelBufferGetHeightOfPlane
 import platform.CoreVideo.CVPixelBufferGetPixelFormatType
+import platform.CoreVideo.CVPixelBufferGetPlaneCount
 import platform.CoreVideo.CVPixelBufferGetWidth
+import platform.CoreVideo.CVPixelBufferIsPlanar
 import platform.CoreVideo.CVPixelBufferLockBaseAddress
 import platform.CoreVideo.CVPixelBufferRefVar
 import platform.CoreVideo.CVPixelBufferUnlockBaseAddress
@@ -191,14 +200,101 @@ private fun copyPixelBuffer(
     val readOnlyLock: ULong = 1uL
     CVPixelBufferLockBaseAddress(src, readOnlyLock)
     CVPixelBufferLockBaseAddress(newBuffer, 0uL)
-    val srcAddress = CVPixelBufferGetBaseAddress(src)
-    val dstAddress = CVPixelBufferGetBaseAddress(newBuffer)
-    val bytesPerRow = CVPixelBufferGetBytesPerRow(src)
-    val totalBytes = bytesPerRow * height
-    if (srcAddress != null && dstAddress != null && totalBytes > 0u) {
-        memcpy(dstAddress, srcAddress, totalBytes)
+    val copied =
+        try {
+            if (CVPixelBufferIsPlanar(src)) {
+                copyPlanarPixelBuffer(src, newBuffer)
+            } else {
+                copyPackedPixelBuffer(src, newBuffer, height)
+            }
+        } finally {
+            CVPixelBufferUnlockBaseAddress(newBuffer, 0uL)
+            CVPixelBufferUnlockBaseAddress(src, readOnlyLock)
+        }
+    if (!copied) {
+        CFRelease(newBuffer)
+        return null
     }
-    CVPixelBufferUnlockBaseAddress(newBuffer, 0uL)
-    CVPixelBufferUnlockBaseAddress(src, readOnlyLock)
     return newBuffer
+}
+
+/**
+ * Bi-planar camera frames (420v) are not one contiguous block.
+ * [CVPixelBufferGetBytesPerRow] can be wider than plane 0 (2904 vs 1920 on a
+ * 1920x1080 buffer). Multiplying that by height writes past the destination.
+ */
+@OptIn(ExperimentalForeignApi::class)
+private fun copyPlanarPixelBuffer(
+    src: platform.CoreVideo.CVPixelBufferRef,
+    dst: platform.CoreVideo.CVPixelBufferRef,
+): Boolean {
+    val planeCount =
+        minOf(
+            CVPixelBufferGetPlaneCount(src),
+            CVPixelBufferGetPlaneCount(dst),
+        )
+    if (planeCount == 0uL) return false
+    var plane = 0uL
+    while (plane < planeCount) {
+        val srcAddress = CVPixelBufferGetBaseAddressOfPlane(src, plane) ?: return false
+        val dstAddress = CVPixelBufferGetBaseAddressOfPlane(dst, plane) ?: return false
+        copyPixelRows(
+            src = srcAddress,
+            dst = dstAddress,
+            srcBytesPerRow = CVPixelBufferGetBytesPerRowOfPlane(src, plane),
+            dstBytesPerRow = CVPixelBufferGetBytesPerRowOfPlane(dst, plane),
+            height =
+                minOf(
+                    CVPixelBufferGetHeightOfPlane(src, plane),
+                    CVPixelBufferGetHeightOfPlane(dst, plane),
+                ),
+        )
+        plane++
+    }
+    return true
+}
+
+@OptIn(ExperimentalForeignApi::class)
+private fun copyPackedPixelBuffer(
+    src: platform.CoreVideo.CVPixelBufferRef,
+    dst: platform.CoreVideo.CVPixelBufferRef,
+    height: ULong,
+): Boolean {
+    val srcAddress = CVPixelBufferGetBaseAddress(src) ?: return false
+    val dstAddress = CVPixelBufferGetBaseAddress(dst) ?: return false
+    copyPixelRows(
+        src = srcAddress,
+        dst = dstAddress,
+        srcBytesPerRow = CVPixelBufferGetBytesPerRow(src),
+        dstBytesPerRow = CVPixelBufferGetBytesPerRow(dst),
+        height = minOf(height, CVPixelBufferGetHeight(dst)),
+    )
+    return true
+}
+
+@OptIn(ExperimentalForeignApi::class)
+private fun copyPixelRows(
+    src: COpaquePointer,
+    dst: COpaquePointer,
+    srcBytesPerRow: ULong,
+    dstBytesPerRow: ULong,
+    height: ULong,
+) {
+    val rowBytes = minOf(srcBytesPerRow, dstBytesPerRow)
+    if (rowBytes == 0uL || height == 0uL) return
+    if (srcBytesPerRow == dstBytesPerRow) {
+        memcpy(dst, src, rowBytes * height)
+        return
+    }
+    val srcBytes = src.reinterpret<ByteVar>()
+    val dstBytes = dst.reinterpret<ByteVar>()
+    var row = 0uL
+    while (row < height) {
+        memcpy(
+            dstBytes + (row * dstBytesPerRow).toLong(),
+            srcBytes + (row * srcBytesPerRow).toLong(),
+            rowBytes,
+        )
+        row++
+    }
 }
