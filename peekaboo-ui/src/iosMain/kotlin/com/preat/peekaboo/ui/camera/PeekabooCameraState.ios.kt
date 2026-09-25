@@ -67,6 +67,8 @@ actual class PeekabooCameraState(
 
     actual var isTorchEnabled: Boolean by mutableStateOf(false)
 
+    actual var previewFrozen: Boolean by mutableStateOf(false)
+
     actual fun toggleCamera() {
         isTorchEnabled = false
         isTorchAvailable = false
@@ -139,10 +141,13 @@ actual fun rememberPeekabooCameraState(
 
 @OptIn(ExperimentalForeignApi::class)
 actual class PeekabooCameraFrame internal constructor(
-    private val sourcePixelBuffer: platform.CoreVideo.CVPixelBufferRef,
+    private val sourcePixelBuffer: platform.CoreVideo.CVPixelBufferRef?,
     actual val metadata: PeekabooFrameMetadata,
 ) {
+    constructor(metadata: PeekabooFrameMetadata) : this(sourcePixelBuffer = null, metadata = metadata)
+
     private var asyncCopy: platform.CoreVideo.CVPixelBufferRef? = null
+    private var asyncCopyReleased = false
 
     /**
      * The pixel buffer to use for analysis. While the consumer holds the frame
@@ -156,9 +161,16 @@ actual class PeekabooCameraFrame internal constructor(
      * because Vision holds an internal reference to the pool buffer.
      */
     val pixelBuffer: platform.CoreVideo.CVPixelBufferRef
-        get() = asyncCopy ?: sourcePixelBuffer
+        get() {
+            asyncCopy?.let { return it }
+            if (asyncCopyReleased) {
+                throw IllegalStateException("Camera frame copy was released")
+            }
+            return sourcePixelBuffer ?: error("Camera frame has no pixel buffer")
+        }
 
     actual fun retainForAsyncAnalysis() {
+        val source = sourcePixelBuffer ?: return
         if (asyncCopy != null) return
         // Copy the AVCapture pool buffer into a Vision-private CVPixelBuffer so
         // the pool slot can be returned immediately when captureOutput returns.
@@ -167,15 +179,19 @@ actual class PeekabooCameraFrame internal constructor(
         // delivery (multi-second freezes every ~10 s with no session
         // interruption notification) when CoreML/Vision retains pool buffers
         // for the duration of inference. Verified on iPhone 13 mini.
-        asyncCopy = copyPixelBuffer(sourcePixelBuffer) ?: return
+        asyncCopy = copyPixelBuffer(source) ?: return
     }
 
     actual fun releaseAfterAsyncAnalysis() {
         val copy = asyncCopy ?: return
         CFRelease(copy)
         asyncCopy = null
+        asyncCopyReleased = true
     }
 }
+
+actual fun metadataOnlyCameraFrame(metadata: PeekabooFrameMetadata): PeekabooCameraFrame =
+    PeekabooCameraFrame(metadata)
 
 @OptIn(ExperimentalForeignApi::class)
 private fun copyPixelBuffer(

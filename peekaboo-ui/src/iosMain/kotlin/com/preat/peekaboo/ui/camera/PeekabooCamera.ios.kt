@@ -660,6 +660,10 @@ private fun RealDeviceCamera(
             }
         }
 
+    LaunchedEffect(state.previewFrozen) {
+        cameraPreviewLayer.connection?.enabled = !state.previewFrozen
+    }
+
     // Update captureSession with new camera configuration whenever camera mode changes.
     LaunchedEffect(state.cameraMode) {
         captureSession.activeInputDevice()?.setTorchEnabled(false)

@@ -42,6 +42,8 @@ actual class PeekabooCameraState(
 
     actual var isTorchEnabled: Boolean by mutableStateOf(false)
 
+    actual var previewFrozen: Boolean by mutableStateOf(false)
+
     internal var triggerCaptureAnchor: (() -> Unit)? = null
 
     actual fun toggleCamera() {
@@ -115,9 +117,11 @@ actual fun rememberPeekabooCameraState(
 }
 
 actual class PeekabooCameraFrame internal constructor(
-    private val imageProxy: ImageProxy,
+    private val imageProxy: ImageProxy?,
     actual val metadata: PeekabooFrameMetadata,
 ) {
+    constructor(metadata: PeekabooFrameMetadata) : this(imageProxy = null, metadata = metadata)
+
     private var retainedForAsyncAnalysis = false
     private var released = false
     private var cachedBitmap: Bitmap? = null
@@ -125,7 +129,20 @@ actual class PeekabooCameraFrame internal constructor(
     val bitmap: Bitmap
         get() {
             check(!released) { "Camera frame was released before bitmap conversion" }
-            return cachedBitmap ?: imageProxy.toBitmap().also { cachedBitmap = it }
+            cachedBitmap?.let { return it }
+            val proxy = imageProxy
+            val created =
+                if (proxy == null) {
+                    Bitmap.createBitmap(
+                        metadata.width.coerceAtLeast(8),
+                        metadata.height.coerceAtLeast(8),
+                        Bitmap.Config.ARGB_8888,
+                    )
+                } else {
+                    proxy.toBitmap()
+                }
+            cachedBitmap = created
+            return created
         }
 
     actual fun retainForAsyncAnalysis() {
@@ -136,7 +153,7 @@ actual class PeekabooCameraFrame internal constructor(
         if (released) return
         cachedBitmap?.recycle()
         cachedBitmap = null
-        imageProxy.close()
+        imageProxy?.close()
         retainedForAsyncAnalysis = false
         released = true
     }
@@ -147,3 +164,6 @@ actual class PeekabooCameraFrame internal constructor(
         }
     }
 }
+
+actual fun metadataOnlyCameraFrame(metadata: PeekabooFrameMetadata): PeekabooCameraFrame =
+    PeekabooCameraFrame(metadata)

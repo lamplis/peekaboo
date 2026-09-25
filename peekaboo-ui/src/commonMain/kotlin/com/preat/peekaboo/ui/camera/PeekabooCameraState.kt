@@ -47,6 +47,8 @@ expect class PeekabooCameraFrame {
     fun releaseAfterAsyncAnalysis()
 }
 
+expect fun metadataOnlyCameraFrame(metadata: PeekabooFrameMetadata): PeekabooCameraFrame
+
 /**
  * State of [PeekabooCamera]. Contains states relating to camera control.
  */
@@ -66,6 +68,8 @@ expect class PeekabooCameraState {
 
     var isTorchEnabled: Boolean
         internal set
+
+    var previewFrozen: Boolean
 
     fun toggleCamera()
 
