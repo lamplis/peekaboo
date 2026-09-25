@@ -124,6 +124,7 @@ actual class PeekabooCameraFrame internal constructor(
 
     private var retainedForAsyncAnalysis = false
     private var released = false
+    private var imageClosed = false
     private var cachedBitmap: Bitmap? = null
 
     val bitmap: Bitmap
@@ -139,7 +140,7 @@ actual class PeekabooCameraFrame internal constructor(
                         Bitmap.Config.ARGB_8888,
                     )
                 } else {
-                    proxy.toBitmap()
+                    proxy.toSoftwareBitmap(::closeImageProxy)
                 }
             cachedBitmap = created
             return created
@@ -153,9 +154,15 @@ actual class PeekabooCameraFrame internal constructor(
         if (released) return
         cachedBitmap?.recycle()
         cachedBitmap = null
-        imageProxy?.close()
+        closeImageProxy()
         retainedForAsyncAnalysis = false
         released = true
+    }
+
+    private fun closeImageProxy() {
+        if (imageClosed) return
+        imageClosed = true
+        imageProxy?.close()
     }
 
     internal fun releaseIfNotRetained() {
@@ -167,3 +174,62 @@ actual class PeekabooCameraFrame internal constructor(
 
 actual fun metadataOnlyCameraFrame(metadata: PeekabooFrameMetadata): PeekabooCameraFrame =
     PeekabooCameraFrame(metadata)
+
+/**
+ * CameraX [ImageProxy.toBitmap] returns a blank buffer on some vendor YUV streams.
+ * Rebuild a software bitmap from NV21 so the pose model sees real pixels.
+ * [onPlanesCopied] runs after the planes are in memory and before the RGB loop,
+ * so the camera buffer is not held through inference and no JPEG encoder runs.
+ * Rotation stays with the caller; this copy keeps the sensor width and height.
+ */
+private fun ImageProxy.toSoftwareBitmap(onPlanesCopied: () -> Unit): Bitmap {
+    if (planes.size < 3 || width <= 0 || height <= 0) {
+        onPlanesCopied()
+        return emptyAnalysisBitmap(width, height)
+    }
+    val y = planes[0].toYuvPlane()
+    val u = planes[1].toYuvPlane()
+    val v = planes[2].toYuvPlane()
+    onPlanesCopied()
+    val nv21 = packYuv420ToNv21(width = width, height = height, y = y, u = u, v = v)
+    println(
+        "[CardScanner][yuv] y=${y.rowStride}/${y.pixelStride}/${y.bytes.size} " +
+            "u=${u.rowStride}/${u.pixelStride}/${u.bytes.size} " +
+            "v=${v.rowStride}/${v.pixelStride}/${v.bytes.size} " +
+            "yMean=${meanPackedY(nv21, width * height)} rgb=software",
+    )
+    val argb = nv21ToArgb(nv21, width, height)
+    val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+    bitmap.setPixels(argb, 0, width, 0, 0, width, height)
+    return bitmap
+}
+
+private fun ImageProxy.PlaneProxy.toYuvPlane(): YuvPlane {
+    val source = buffer.duplicate()
+    val bytes = ByteArray(source.remaining())
+    source.get(bytes)
+    return YuvPlane(bytes = bytes, rowStride = rowStride, pixelStride = pixelStride)
+}
+
+private fun emptyAnalysisBitmap(
+    width: Int,
+    height: Int,
+): Bitmap =
+    Bitmap.createBitmap(
+        width.coerceAtLeast(1),
+        height.coerceAtLeast(1),
+        Bitmap.Config.ARGB_8888,
+    )
+
+private fun meanPackedY(
+    nv21: ByteArray,
+    ySize: Int,
+): Int {
+    if (ySize <= 0) return 0
+    val count = minOf(ySize, nv21.size)
+    var sum = 0L
+    for (index in 0 until count) {
+        sum += nv21[index].toInt() and 0xFF
+    }
+    return (sum / count).toInt()
+}

@@ -20,7 +20,7 @@ import android.content.ContextWrapper
 import android.graphics.Bitmap
 import android.graphics.Matrix
 import android.util.Rational
-import androidx.camera.core.AspectRatio
+import android.util.Size
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
@@ -30,6 +30,9 @@ import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.core.UseCaseGroup
 import androidx.camera.core.ViewPort
+import androidx.camera.core.resolutionselector.AspectRatioStrategy
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.Image
@@ -195,9 +198,18 @@ private fun CameraWithGrantedPermission(
             if (state.onFrame != null || state.onScannerFrame != null) {
                 val analyzer =
                     ImageAnalysis.Builder()
-                        .setTargetAspectRatio(AspectRatio.RATIO_4_3)
+                        .setResolutionSelector(
+                            ResolutionSelector.Builder()
+                                .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
+                                .setResolutionStrategy(
+                                    ResolutionStrategy(
+                                        Size(1440, 1080),
+                                        ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER,
+                                    ),
+                                )
+                                .build(),
+                        )
                         .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                        .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
                         .build()
 
                 analyzer.apply {

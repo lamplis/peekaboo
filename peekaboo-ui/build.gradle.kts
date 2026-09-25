@@ -26,6 +26,7 @@ kotlin {
         namespace = "com.preat.peekaboo.ui"
         compileSdk = libs.versions.android.compileSdk.get().toInt()
         minSdk = libs.versions.android.minSdk.get().toInt()
+        withHostTest {}
         compilerOptions {
             jvmTarget.set(JvmTarget.JVM_11)
         }
