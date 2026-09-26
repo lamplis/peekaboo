@@ -159,6 +159,23 @@ actual class PeekabooCameraFrame internal constructor(
         released = true
     }
 
+    actual fun copyLumaThumbnail(maxLongEdge: Int): LumaThumbnail? {
+        val proxy = imageProxy ?: return null
+        if (released || proxy.planes.isEmpty() || proxy.width <= 0 || proxy.height <= 0) return null
+        val plane = proxy.planes[0]
+        val source = plane.buffer.duplicate()
+        val bytes = ByteArray(source.remaining())
+        source.get(bytes)
+        return downsampleLuma(
+            bytes = bytes,
+            width = proxy.width,
+            height = proxy.height,
+            rowStride = plane.rowStride,
+            pixelStride = plane.pixelStride,
+            maxLongEdge = maxLongEdge,
+        )
+    }
+
     private fun closeImageProxy() {
         if (imageClosed) return
         imageClosed = true
@@ -220,6 +237,31 @@ private fun emptyAnalysisBitmap(
         height.coerceAtLeast(1),
         Bitmap.Config.ARGB_8888,
     )
+
+private fun downsampleLuma(
+    bytes: ByteArray,
+    width: Int,
+    height: Int,
+    rowStride: Int,
+    pixelStride: Int,
+    maxLongEdge: Int,
+): LumaThumbnail? {
+    if (width <= 0 || height <= 0 || rowStride <= 0 || pixelStride <= 0 || bytes.isEmpty()) return null
+    val longEdge = maxOf(width, height)
+    val limit = maxLongEdge.coerceAtLeast(1)
+    val outWidth = if (longEdge <= limit) width else (width.toFloat() * limit / longEdge).toInt().coerceAtLeast(1)
+    val outHeight = if (longEdge <= limit) height else (height.toFloat() * limit / longEdge).toInt().coerceAtLeast(1)
+    val output = ByteArray(outWidth * outHeight)
+    for (y in 0 until outHeight) {
+        val srcY = (y * height / outHeight).coerceIn(0, height - 1)
+        for (x in 0 until outWidth) {
+            val srcX = (x * width / outWidth).coerceIn(0, width - 1)
+            val index = srcY * rowStride + srcX * pixelStride
+            output[y * outWidth + x] = if (index in bytes.indices) bytes[index] else 0
+        }
+    }
+    return LumaThumbnail(width = outWidth, height = outHeight, bytes = output)
+}
 
 private fun meanPackedY(
     nv21: ByteArray,

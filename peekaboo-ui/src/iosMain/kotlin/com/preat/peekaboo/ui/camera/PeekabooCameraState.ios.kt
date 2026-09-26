@@ -182,6 +182,9 @@ actual class PeekabooCameraFrame internal constructor(
         asyncCopy = copyPixelBuffer(source) ?: return
     }
 
+    @Suppress("UNUSED_PARAMETER")
+    actual fun copyLumaThumbnail(maxLongEdge: Int): LumaThumbnail? = null
+
     actual fun releaseAfterAsyncAnalysis() {
         val copy = asyncCopy ?: return
         CFRelease(copy)

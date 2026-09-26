@@ -39,12 +39,20 @@ data class PeekabooFrameMetadata(
     val timestampMillis: Long,
 )
 
+data class LumaThumbnail(
+    val width: Int,
+    val height: Int,
+    val bytes: ByteArray,
+)
+
 expect class PeekabooCameraFrame {
     val metadata: PeekabooFrameMetadata
 
     fun retainForAsyncAnalysis()
 
     fun releaseAfterAsyncAnalysis()
+
+    fun copyLumaThumbnail(maxLongEdge: Int): LumaThumbnail?
 }
 
 expect fun metadataOnlyCameraFrame(metadata: PeekabooFrameMetadata): PeekabooCameraFrame
