@@ -267,13 +267,14 @@ private fun CameraWithGrantedPermission(
             boundCamera.value = null
             state.isTorchAvailable = false
             state.setTorchActive(false)
+            state.isCameraReady = false
             cameraProvider?.unbindAll()
         }
     }
 
     LaunchedEffect(state.cameraMode, cameraProvider, imageAnalyzer, captureAspectRatio) {
+        state.isCameraReady = false
         if (cameraProvider != null) {
-            state.onCameraReady()
             runCatching { boundCamera.value?.cameraControl?.enableTorch(false) }
             boundCamera.value = null
             cameraProvider?.unbindAll()
@@ -305,6 +306,9 @@ private fun CameraWithGrantedPermission(
                 state.setTorchActive(false)
             }
             preview.setSurfaceProvider(previewView.surfaceProvider)
+            if (camera != null) {
+                state.onCameraReady()
+            }
         } else {
             boundCamera.value = null
             state.isTorchAvailable = false

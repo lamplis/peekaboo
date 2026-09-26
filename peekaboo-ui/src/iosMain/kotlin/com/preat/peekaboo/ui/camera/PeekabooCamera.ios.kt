@@ -300,6 +300,7 @@ private fun BoxScope.AuthorizedCamera(
         RealDeviceCamera(
             camera = camera,
             onCameraReady = { cameraReady = true },
+            onCameraStopped = { cameraReady = false },
             captureIcon = captureIcon,
             convertIcon = convertIcon,
             progressIndicator = progressIndicator,
@@ -376,6 +377,7 @@ private fun BoxScope.RealDeviceCamera(
     convertIcon: @Composable (onClick: () -> Unit) -> Unit,
     progressIndicator: @Composable () -> Unit,
     onCapture: (byteArray: ByteArray?) -> Unit,
+    onCameraStopped: () -> Unit = {},
 ) {
     var isFrontCamera by remember { mutableStateOf(camera.position == AVCaptureDevicePositionFront) }
     val capturePhotoOutput = remember { AVCapturePhotoOutput() }
@@ -553,6 +555,7 @@ private fun BoxScope.RealDeviceCamera(
     )
     DisposableEffect(captureSession) {
         onDispose {
+            onCameraStopped()
             captureSession.stopRunning()
         }
     }
@@ -666,6 +669,7 @@ private fun RealDeviceCamera(
 
     // Update captureSession with new camera configuration whenever camera mode changes.
     LaunchedEffect(state.cameraMode) {
+        state.isCameraReady = false
         captureSession.activeInputDevice()?.setTorchEnabled(false)
         state.isTorchEnabled = false
         state.isTorchAvailable = false
@@ -754,6 +758,7 @@ private fun RealDeviceCamera(
     )
     DisposableEffect(captureSession) {
         onDispose {
+            state.isCameraReady = false
             captureSession.activeInputDevice()?.setTorchEnabled(false)
             state.isTorchEnabled = false
             state.isTorchAvailable = false
